@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CrickTrack - Dashboard</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script>
+    (function () {
+      const raw = sessionStorage.getItem("crictrack_user");
+      if (!raw) {
+        window.location.replace("login.html");
+      }
+    })();
+  </script>
+</head>
+<body>
+
+<div class="navbar dark">
+  <div class="nav-left">
+    <div class="logo">CrickTrack</div>
+    <div class="nav-link active" onclick="window.location.href='dashboard.html'">Dashboard</div>
+    <div class="nav-link" onclick="window.location.href='teams.html'">Teams</div>
+  </div>
+  <div class="nav-right">
+    <div class="account-menu" id="accountMenu">
+      <button type="button" class="account-trigger" onclick="toggleAccountMenu(event)">
+        <span id="currentUserName">all</span>
+        <span class="profile" id="profileBadge">A</span>
+      </button>
+      <div class="account-dropdown" id="accountDropdown">
+        <div class="account-row"><span class="account-label">Name</span><strong id="accountName">-</strong></div>
+        <div class="account-row"><span class="account-label">Email</span><strong id="accountEmail">-</strong></div>
+        <div class="account-row"><span class="account-label">User ID</span><strong id="accountId">-</strong></div>
+        <button type="button" class="logout-btn" onclick="logout()">Logout</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+  <h1>Dashboard</h1>
+  <div class="form-message" id="dashboardPageMessage"></div>
+
+  <div class="top-actions" style="margin-bottom:20px;">
+    <button class="btn-outline" onclick="window.location.href='teams.html'">+ Add Team</button>
+    <button class="btn-primary" onclick="openModal()">+ Add Match</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat-card"><h3>TOTAL TEAMS</h3><p id="totalTeams">0</p></div>
+    <div class="stat-card"><h3>TOTAL PLAYERS</h3><p id="totalPlayers">0</p></div>
+    <div class="stat-card"><h3>TOTAL MATCHES</h3><p id="totalMatches">0</p></div>
+    <div class="stat-card"><h3>COMPLETED</h3><p id="completedMatches">0</p></div>
+  </div>
+
+  <h2 class="section-title">Recent Matches</h2>
+  <div class="matches-grid" id="matchesGrid"></div>
+</div>
+
+<div class="modal" id="matchModal">
+  <div class="modal-content">
+    <span class="close-btn" onclick="closeModal()">X</span>
+    <h2 id="matchModalTitle">Add New Match</h2>
+
+    <select id="team1Select"></select>
+    <div class="field-error" id="team1Error"></div>
+    <select id="team2Select"></select>
+    <div class="field-error" id="team2Error"></div>
+    <input type="text" id="venueInput" placeholder="Venue" maxlength="200">
+    <div class="field-error" id="venueError"></div>
+    <input type="date" id="matchDateInput">
+    <div class="field-error" id="matchDateError"></div>
+    <select id="statusInput">
+      <option value="upcoming">Upcoming</option>
+      <option value="completed">Completed</option>
+    </select>
+    <input type="text" id="team1ScoreInput" placeholder="Team 1 Score (optional)" maxlength="60">
+    <div class="field-error" id="team1ScoreError"></div>
+    <input type="text" id="team2ScoreInput" placeholder="Team 2 Score (optional)" maxlength="60">
+    <div class="field-error" id="team2ScoreError"></div>
+    <input type="text" id="resultInput" placeholder="Result text (optional)" maxlength="255">
+    <div class="field-error" id="resultError"></div>
+    <div class="form-message" id="matchFormMessage"></div>
+
+    <button class="btn-primary" id="matchSubmitBtn" onclick="submitMatch()">Schedule Match</button>
+  </div>
+</div>
+
+<script>
+const API_BASE = "http://localhost:4000/api";
+let teamsCache = [];
+let matchesCache = [];
+let editingMatchId = null;
+let currentUser = null;
+const VENUE_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9\s,.'()-]{2,199}$/;
+const SCORE_REGEX = /^[0-9]{1,3}\/[0-9]{1,2}(\s\([0-9]{1,2}(\.[0-9])?\sov\))?$/i;
+
+function setFormMessage(id, type, message) {
+  const el = document.getElementById(id);
+  el.className = "form-message" + (type ? ` ${type}` : "");
+  el.innerText = message || "";
+  el.style.display = message ? "block" : "none";
+}
+
+function setFieldError(inputId, errorId, message) {
+  const input = document.getElementById(inputId);
+  const error = document.getElementById(errorId);
+  error.innerText = message || "";
+  input.classList.toggle("input-error", Boolean(message));
+}
+
+function clearMatchFormErrors() {
+  setFieldError("team1Select", "team1Error", "");
+  setFieldError("team2Select", "team2Error", "");
+  setFieldError("venueInput", "venueError", "");
+  setFieldError("matchDateInput", "matchDateError", "");
+  setFieldError("team1ScoreInput", "team1ScoreError", "");
+  setFieldError("team2ScoreInput", "team2ScoreError", "");
+  setFieldError("resultInput", "resultError", "");
+  setFormMessage("matchFormMessage", "", "");
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+async function fetchJson(url, options = {}) {
+  const rawUser = sessionStorage.getItem("crictrack_user");
+  const parsedUser = rawUser ? JSON.parse(rawUser) : null;
+  const userId = parsedUser && parsedUser.id ? parsedUser.id : null;
+  const mergedHeaders = {
+    ...(options.headers || {})
+  };
+  if (userId) {
+    mergedHeaders["x-user-id"] = String(userId);
+  }
+  const response = await fetch(url, {
+    ...options,
+    headers: mergedHeaders
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.message || "Request failed");
+  return data;
+}
+
+function openModal() {
+  clearMatchFormErrors();
+  editingMatchId = null;
+  document.getElementById("matchModalTitle").innerText = "Add New Match";
+  document.getElementById("matchSubmitBtn").innerText = "Schedule Match";
+  document.getElementById("team1Select").value = "";
+  document.getElementById("team2Select").value = "";
+  document.getElementById("venueInput").value = "";
+  document.getElementById("matchDateInput").value = "";
+  document.getElementById("statusInput").value = "upcoming";
+  document.getElementById("team1ScoreInput").value = "";
+  document.getElementById("team2ScoreInput").value = "";
+  document.getElementById("resultInput").value = "";
+  document.getElementById("matchModal").style.display = "flex";
+  closeAccountMenu();
+}
+
+function openEditMatchModal(matchId) {
+  clearMatchFormErrors();
+  const match = matchesCache.find((m) => m.id === matchId);
+  if (!match) {
+    setFormMessage("dashboardPageMessage", "error", "Match data not found.");
+    return;
+  }
+  editingMatchId = matchId;
+  document.getElementById("matchModalTitle").innerText = "Edit Match";
+  document.getElementById("matchSubmitBtn").innerText = "Update Match";
+  document.getElementById("team1Select").value = String(match.team1_id);
+  document.getElementById("team2Select").value = String(match.team2_id);
+  document.getElementById("venueInput").value = match.venue || "";
+  document.getElementById("matchDateInput").value = new Date(match.match_date).toISOString().slice(0, 10);
+  document.getElementById("statusInput").value = match.status || "upcoming";
+  document.getElementById("team1ScoreInput").value = match.team1_score || "";
+  document.getElementById("team2ScoreInput").value = match.team2_score || "";
+  document.getElementById("resultInput").value = match.result_text || "";
+  document.getElementById("matchModal").style.display = "flex";
+  closeAccountMenu();
+}
+
+function closeModal() {
+  document.getElementById("matchModal").style.display = "none";
+  editingMatchId = null;
+  clearMatchFormErrors();
+}
+
+function toggleAccountMenu(event) {
+  event.stopPropagation();
+  const dropdown = document.getElementById("accountDropdown");
+  dropdown.classList.toggle("open");
+}
+
+function closeAccountMenu() {
+  document.getElementById("accountDropdown").classList.remove("open");
+}
+
+function logout() {
+  sessionStorage.removeItem("crictrack_user");
+  localStorage.removeItem("crictrack_user");
+  window.location.href = "login.html";
+}
+
+async function loadSummary() {
+  const summary = await fetchJson(`${API_BASE}/dashboard/summary`);
+  document.getElementById("totalTeams").innerText = summary.totalTeams;
+  document.getElementById("totalPlayers").innerText = summary.totalPlayers;
+  document.getElementById("totalMatches").innerText = summary.totalMatches;
+  document.getElementById("completedMatches").innerText = summary.completedMatches;
+}
+
+function renderMatches(matches) {
+  const grid = document.getElementById("matchesGrid");
+  if (!matches.length) {
+    grid.innerHTML = '<div class="match-card">No matches yet.</div>';
+    return;
+  }
+
+  grid.innerHTML = matches.map((match) => {
+    const badgeClass = match.status === "completed" ? "completed" : "upcoming";
+    const badgeText = match.status.toUpperCase();
+    const dateText = new Date(match.match_date).toLocaleDateString();
+    const scoreMarkup = match.status === "completed"
+      ? `
+          <div>
+            ${escapeHtml(match.team1_name)}
+            <div class="score">${escapeHtml(match.team1_score || "-")}</div>
+          </div>
+          <div class="vs">VS</div>
+          <div>
+            ${escapeHtml(match.team2_name)}
+            <div class="score">${escapeHtml(match.team2_score || "-")}</div>
+          </div>
+        `
+      : `
+          <div>${escapeHtml(match.team1_name)}</div>
+          <div class="vs">VS</div>
+          <div>${escapeHtml(match.team2_name)}</div>
+        `;
+
+    const footer = match.status === "completed"
+      ? `
+          <div class="match-footer">
+            <span>&#128205; ${escapeHtml(match.venue)}</span>
+            <span class="result">${escapeHtml(match.result_text || "Result pending")}</span>
+          </div>
+        `
+      : `<div class="match-venue">&#128205; ${escapeHtml(match.venue)}</div>`;
+
+    return `
+      <div class="match-card">
+        <div class="match-top">
+          <span class="match-date">${dateText}</span>
+          <div>
+            <span class="badge ${badgeClass}">${badgeText}</span>
+            <button class="btn-outline" style="margin-left:8px;" onclick="openEditMatchModal(${match.id})">Edit</button>
+            <button class="btn-outline" style="margin-left:6px;" onclick="deleteMatch(${match.id})">Delete</button>
+          </div>
+        </div>
+        <div class="teams-row">${scoreMarkup}</div>
+        ${footer}
+      </div>
+    `;
+  }).join("");
+}
+
+async function loadMatches() {
+  matchesCache = await fetchJson(`${API_BASE}/matches?limit=20`);
+  renderMatches(matchesCache);
+}
+
+function populateTeamSelects(teams) {
+  const select1 = document.getElementById("team1Select");
+  const select2 = document.getElementById("team2Select");
+  const options = ['<option value="">Select Team</option>']
+    .concat(teams.map((team) => `<option value="${team.id}">${escapeHtml(team.name)}</option>`))
+    .join("");
+  select1.innerHTML = options;
+  select2.innerHTML = options;
+}
+
+async function loadTeams() {
+  teamsCache = await fetchJson(`${API_BASE}/teams`);
+  populateTeamSelects(teamsCache);
+}
+
+async function submitMatch() {
+  clearMatchFormErrors();
+  const team1Id = Number(document.getElementById("team1Select").value);
+  const team2Id = Number(document.getElementById("team2Select").value);
+  const venue = document.getElementById("venueInput").value.trim();
+  const matchDate = document.getElementById("matchDateInput").value;
+  const status = document.getElementById("statusInput").value;
+  const team1Score = document.getElementById("team1ScoreInput").value.trim();
+  const team2Score = document.getElementById("team2ScoreInput").value.trim();
+  const resultText = document.getElementById("resultInput").value.trim();
+
+  let hasError = false;
+  if (!team1Id) {
+    setFieldError("team1Select", "team1Error", "Select Team 1.");
+    hasError = true;
+  }
+  if (!team2Id) {
+    setFieldError("team2Select", "team2Error", "Select Team 2.");
+    hasError = true;
+  }
+  if (!venue) {
+    setFieldError("venueInput", "venueError", "Venue is required.");
+    hasError = true;
+  } else if (!VENUE_REGEX.test(venue)) {
+    setFieldError("venueInput", "venueError", "Use 3-200 chars: letters, numbers, spaces, comma, dot, hyphen.");
+    hasError = true;
+  }
+  if (!matchDate) {
+    setFieldError("matchDateInput", "matchDateError", "Match date is required.");
+    hasError = true;
+  }
+
+  if (team1Id && team2Id && team1Id === team2Id) {
+    setFieldError("team2Select", "team2Error", "Team 2 must be different from Team 1.");
+    hasError = true;
+  }
+  if (status === "completed") {
+    if (!team1Score) {
+      setFieldError("team1ScoreInput", "team1ScoreError", "Required for completed match.");
+      hasError = true;
+    } else if (!SCORE_REGEX.test(team1Score)) {
+      setFieldError("team1ScoreInput", "team1ScoreError", "Use score format like 210/4 or 210/4 (20.0 ov).");
+      hasError = true;
+    }
+    if (!team2Score) {
+      setFieldError("team2ScoreInput", "team2ScoreError", "Required for completed match.");
+      hasError = true;
+    } else if (!SCORE_REGEX.test(team2Score)) {
+      setFieldError("team2ScoreInput", "team2ScoreError", "Use score format like 175/8 or 175/8 (20.0 ov).");
+      hasError = true;
+    }
+    if (!resultText) {
+      setFieldError("resultInput", "resultError", "Result is required for completed match.");
+      hasError = true;
+    } else if (resultText.length < 6) {
+      setFieldError("resultInput", "resultError", "Result text is too short.");
+      hasError = true;
+    }
+  }
+
+  if (hasError) {
+    setFormMessage("matchFormMessage", "error", "Please fix the highlighted fields.");
+    return;
+  }
+
+  try {
+    const url = editingMatchId ? `${API_BASE}/matches/${editingMatchId}` : `${API_BASE}/matches`;
+    const method = editingMatchId ? "PUT" : "POST";
+    await fetchJson(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        team1Id,
+        team2Id,
+        venue,
+        matchDate,
+        status,
+        team1Score: team1Score || null,
+        team2Score: team2Score || null,
+        resultText: resultText || null
+      })
+    });
+
+    closeModal();
+    await Promise.all([loadSummary(), loadMatches()]);
+  } catch (error) {
+    setFormMessage("matchFormMessage", "error", error.message);
+  }
+}
+
+async function deleteMatch(matchId) {
+  try {
+    await fetchJson(`${API_BASE}/matches/${matchId}`, { method: "DELETE" });
+    await Promise.all([loadSummary(), loadMatches()]);
+  } catch (error) {
+    setFormMessage("dashboardPageMessage", "error", error.message);
+  }
+}
+
+function initUserBadge() {
+  const raw = sessionStorage.getItem("crictrack_user");
+  if (!raw) {
+    document.getElementById("currentUserName").innerText = "Guest";
+    document.getElementById("profileBadge").innerText = "G";
+    document.getElementById("accountName").innerText = "Guest";
+    document.getElementById("accountEmail").innerText = "-";
+    document.getElementById("accountId").innerText = "-";
+    return;
+  }
+  try {
+    currentUser = JSON.parse(raw);
+    const displayName = currentUser.displayName || "User";
+    const email = currentUser.email || "-";
+    const id = currentUser.id || "-";
+    document.getElementById("currentUserName").innerText = displayName;
+    document.getElementById("profileBadge").innerText = displayName.slice(0, 1).toUpperCase();
+    document.getElementById("accountName").innerText = displayName;
+    document.getElementById("accountEmail").innerText = email;
+    document.getElementById("accountId").innerText = id;
+  } catch (_error) {
+    document.getElementById("currentUserName").innerText = "Guest";
+    document.getElementById("profileBadge").innerText = "G";
+    document.getElementById("accountName").innerText = "Guest";
+    document.getElementById("accountEmail").innerText = "-";
+    document.getElementById("accountId").innerText = "-";
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const menu = document.getElementById("accountMenu");
+  if (!menu.contains(event.target)) {
+    closeAccountMenu();
+  }
+});
+
+initUserBadge();
+Promise.all([loadSummary(), loadTeams(), loadMatches()])
+  .then(() => setFormMessage("dashboardPageMessage", "", ""))
+  .catch((error) => setFormMessage("dashboardPageMessage", "error", error.message));
+</script>
+
+</body>
+</html>

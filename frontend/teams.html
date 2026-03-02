@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CrickTrack - Teams</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script>
+    (function () {
+      const raw = sessionStorage.getItem("crictrack_user");
+      if (!raw) {
+        window.location.replace("login.html");
+      }
+    })();
+  </script>
+</head>
+<body>
+
+<div class="navbar dark">
+  <div class="nav-left">
+    <div class="logo">CrickTrack</div>
+    <div class="nav-link" onclick="window.location.href='dashboard.html'">Dashboard</div>
+    <div class="nav-link active" onclick="window.location.href='teams.html'">Teams</div>
+  </div>
+  <div class="nav-right">
+    <div class="account-menu" id="accountMenu">
+      <button type="button" class="account-trigger" onclick="toggleAccountMenu(event)">
+        <span id="currentUserName">all</span>
+        <span class="profile" id="profileBadge">A</span>
+      </button>
+      <div class="account-dropdown" id="accountDropdown">
+        <div class="account-row"><span class="account-label">Name</span><strong id="accountName">-</strong></div>
+        <div class="account-row"><span class="account-label">Email</span><strong id="accountEmail">-</strong></div>
+        <div class="account-row"><span class="account-label">User ID</span><strong id="accountId">-</strong></div>
+        <button type="button" class="logout-btn" onclick="logout()">Logout</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="container teams-page">
+  <div class="page-header">
+    <h1>Team Management</h1>
+    <button class="btn-primary add-team-btn" type="button" onclick="openTeamModal()">+ Add Team</button>
+  </div>
+  <div class="form-message" id="teamsPageMessage"></div>
+  <div class="team-grid" id="teamGrid"></div>
+</div>
+
+<div class="modal" id="teamModal">
+  <div class="modal-content">
+    <span class="close-btn" onclick="closeTeamModal()">X</span>
+    <h2 id="teamModalTitle">Create New Team</h2>
+    <input type="text" id="teamNameInput" placeholder="Team Name" maxlength="80">
+    <div class="field-error" id="teamNameError"></div>
+    <input type="text" id="teamCityInput" placeholder="City" maxlength="80">
+    <div class="field-error" id="teamCityError"></div>
+    <div class="form-message" id="teamFormMessage"></div>
+    <button class="btn-primary" id="teamSubmitBtn" onclick="submitTeam()">Save Team</button>
+  </div>
+</div>
+
+<div class="modal" id="playerModal">
+  <div class="modal-content">
+    <span class="close-btn" onclick="closePlayerModal()">X</span>
+    <h2 id="playerModalTitle">Add Player</h2>
+    <input type="text" id="playerNameInput" placeholder="Player Name" maxlength="80">
+    <div class="field-error" id="playerNameError"></div>
+    <select id="playerRoleInput">
+      <option value="">Select Role</option>
+      <option value="Batsman">Batsman</option>
+      <option value="Bowler">Bowler</option>
+      <option value="All Rounder">All Rounder</option>
+      <option value="Wicket Keeper">Wicket Keeper</option>
+    </select>
+    <div class="field-error" id="playerRoleError"></div>
+    <input type="number" id="playerRunsInput" placeholder="Runs" min="0" max="50000" step="1">
+    <div class="field-error" id="playerRunsError"></div>
+    <input type="number" id="playerWicketsInput" placeholder="Wickets" min="0" max="2000" step="1">
+    <div class="field-error" id="playerWicketsError"></div>
+    <div class="form-message" id="playerFormMessage"></div>
+    <button class="btn-primary" id="playerSubmitBtn" onclick="submitPlayer()">Save Player</button>
+  </div>
+</div>
+
+<script>
+const API_BASE = "http://localhost:4000/api";
+const PLAYER_ROLES = ["Batsman", "Bowler", "All Rounder", "Wicket Keeper"];
+const TEAM_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9\s.'&-]{1,79}$/;
+const NAME_REGEX = /^[a-zA-Z][a-zA-Z\s.'-]{1,79}$/;
+const CITY_REGEX = /^[a-zA-Z][a-zA-Z\s.'-]{1,79}$/;
+let currentUser = null;
+let editingTeamId = null;
+let editingPlayerId = null;
+let playerTeamId = null;
+let teamsCache = [];
+const expandedTeamIds = new Set();
+const playersByTeam = {};
+
+function setFormMessage(id, type, message) {
+  const el = document.getElementById(id);
+  el.className = "form-message" + (type ? ` ${type}` : "");
+  el.innerText = message || "";
+  el.style.display = message ? "block" : "none";
+}
+
+function setFieldError(inputId, errorId, message) {
+  const input = document.getElementById(inputId);
+  const error = document.getElementById(errorId);
+  error.innerText = message || "";
+  input.classList.toggle("input-error", Boolean(message));
+}
+
+function clearTeamFormErrors() {
+  setFieldError("teamNameInput", "teamNameError", "");
+  setFieldError("teamCityInput", "teamCityError", "");
+  setFormMessage("teamFormMessage", "", "");
+}
+
+function clearPlayerFormErrors() {
+  setFieldError("playerNameInput", "playerNameError", "");
+  setFieldError("playerRoleInput", "playerRoleError", "");
+  setFieldError("playerRunsInput", "playerRunsError", "");
+  setFieldError("playerWicketsInput", "playerWicketsError", "");
+  setFormMessage("playerFormMessage", "", "");
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+async function fetchJson(url, options = {}) {
+  const rawUser = sessionStorage.getItem("crictrack_user");
+  const parsedUser = rawUser ? JSON.parse(rawUser) : null;
+  const userId = parsedUser && parsedUser.id ? parsedUser.id : null;
+  const mergedHeaders = {
+    ...(options.headers || {})
+  };
+  if (userId) {
+    mergedHeaders["x-user-id"] = String(userId);
+  }
+  const response = await fetch(url, {
+    ...options,
+    headers: mergedHeaders
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.message || "Request failed");
+  return data;
+}
+
+function getTeamById(teamId) {
+  return teamsCache.find((team) => team.id === teamId) || null;
+}
+
+function getPlayerById(teamId, playerId) {
+  return (playersByTeam[teamId] || []).find((player) => player.id === playerId) || null;
+}
+
+function openTeamModal() {
+  closeAccountMenu();
+  clearTeamFormErrors();
+  editingTeamId = null;
+  document.getElementById("teamModalTitle").innerText = "Create New Team";
+  document.getElementById("teamSubmitBtn").innerText = "Save Team";
+  document.getElementById("teamNameInput").value = "";
+  document.getElementById("teamCityInput").value = "";
+  document.getElementById("teamModal").style.display = "flex";
+}
+
+function openEditTeamModal(teamId) {
+  closeAccountMenu();
+  clearTeamFormErrors();
+  const team = getTeamById(teamId);
+  if (!team) return;
+  editingTeamId = team.id;
+  document.getElementById("teamModalTitle").innerText = "Edit Team";
+  document.getElementById("teamSubmitBtn").innerText = "Update Team";
+  document.getElementById("teamNameInput").value = team.name;
+  document.getElementById("teamCityInput").value = team.city;
+  document.getElementById("teamModal").style.display = "flex";
+}
+
+function closeTeamModal() {
+  document.getElementById("teamModal").style.display = "none";
+  editingTeamId = null;
+  clearTeamFormErrors();
+}
+
+function openPlayerModal(teamId, playerId = null) {
+  closeAccountMenu();
+  clearPlayerFormErrors();
+  playerTeamId = teamId;
+  editingPlayerId = playerId;
+  const player = playerId ? getPlayerById(teamId, playerId) : null;
+  document.getElementById("playerModalTitle").innerText = player ? "Edit Player" : "Add Player";
+  document.getElementById("playerSubmitBtn").innerText = player ? "Update Player" : "Save Player";
+  document.getElementById("playerNameInput").value = player ? player.name : "";
+  document.getElementById("playerRoleInput").value = player ? player.role : "";
+  document.getElementById("playerRunsInput").value = player ? player.runs : "";
+  document.getElementById("playerWicketsInput").value = player ? player.wickets : "";
+  document.getElementById("playerModal").style.display = "flex";
+}
+
+function closePlayerModal() {
+  document.getElementById("playerModal").style.display = "none";
+  editingPlayerId = null;
+  playerTeamId = null;
+  clearPlayerFormErrors();
+}
+
+function toggleAccountMenu(event) {
+  event.stopPropagation();
+  document.getElementById("accountDropdown").classList.toggle("open");
+}
+
+function closeAccountMenu() {
+  document.getElementById("accountDropdown").classList.remove("open");
+}
+
+function logout() {
+  sessionStorage.removeItem("crictrack_user");
+  localStorage.removeItem("crictrack_user");
+  window.location.href = "login.html";
+}
+
+function rosterMarkup(teamId) {
+  const players = playersByTeam[teamId] || [];
+  const playersHtml = players.length
+    ? players.map((player) => `
+        <div class="roster-player-row">
+          <div class="roster-player-left">
+            <span class="roster-player-name">${escapeHtml(player.name)}</span>
+            <span class="role-pill">${escapeHtml(player.role)}</span>
+          </div>
+          <div class="roster-player-right">
+            <span class="player-metric">R ${Number(player.runs || 0)}</span>
+            <span class="player-metric">W ${Number(player.wickets || 0)}</span>
+            <button class="icon-btn roster-icon" type="button" aria-label="Edit Player" onclick="openPlayerModal(${teamId}, ${player.id})">&#9998;</button>
+            <button class="icon-btn roster-icon icon-danger" type="button" aria-label="Delete Player" onclick="deletePlayer(${teamId}, ${player.id})">&#128465;</button>
+          </div>
+        </div>
+      `).join("")
+    : `<div class="roster-empty">No players in roster yet.</div>`;
+
+  return `
+    <div class="roster-section">
+      <div class="roster-header">
+        <strong>Roster</strong>
+        <button class="btn-outline roster-add-btn" type="button" onclick="openPlayerModal(${teamId})">Add Player</button>
+      </div>
+      <div class="roster-list">${playersHtml}</div>
+    </div>
+  `;
+}
+
+function teamCardMarkup(team) {
+  const isExpanded = expandedTeamIds.has(team.id);
+  const chevron = isExpanded ? "&#708;" : "&#709;";
+  return `
+    <div class="team-card ${isExpanded ? "expanded" : ""}">
+      <div class="team-main">
+        <div class="team-header">
+          <div class="team-meta">
+            <div class="team-name">${escapeHtml(team.name)}</div>
+            <div class="city">&#128205; ${escapeHtml(team.city)}</div>
+          </div>
+          <div class="team-actions">
+            <span class="members-pill">&#128101; ${Number(team.player_count || 0)}</span>
+            <span class="action-divider"></span>
+            <button class="icon-btn" type="button" aria-label="Edit Team" onclick="openEditTeamModal(${team.id})">&#9998;</button>
+            <button class="icon-btn icon-danger" type="button" aria-label="Delete Team" onclick="deleteTeam(${team.id})">&#128465;</button>
+            <button class="icon-btn icon-chevron" type="button" aria-label="Expand Team" onclick="toggleRoster(${team.id})">${chevron}</button>
+          </div>
+        </div>
+      </div>
+      ${isExpanded ? rosterMarkup(team.id) : ""}
+    </div>
+  `;
+}
+
+function renderTeams() {
+  const teamGrid = document.getElementById("teamGrid");
+  if (!teamsCache.length) {
+    teamGrid.innerHTML = '<div class="team-card"><div class="team-name">No teams yet</div></div>';
+    return;
+  }
+  teamGrid.innerHTML = teamsCache.map(teamCardMarkup).join("");
+}
+
+async function loadTeams() {
+  try {
+    teamsCache = await fetchJson(`${API_BASE}/teams`);
+    renderTeams();
+    setFormMessage("teamsPageMessage", "", "");
+  } catch (error) {
+    setFormMessage("teamsPageMessage", "error", error.message);
+  }
+}
+
+async function loadPlayers(teamId) {
+  playersByTeam[teamId] = await fetchJson(`${API_BASE}/teams/${teamId}/players`);
+}
+
+async function toggleRoster(teamId) {
+  if (expandedTeamIds.has(teamId)) {
+    expandedTeamIds.delete(teamId);
+    renderTeams();
+    return;
+  }
+  try {
+    expandedTeamIds.add(teamId);
+    await loadPlayers(teamId);
+    renderTeams();
+  } catch (error) {
+    expandedTeamIds.delete(teamId);
+    setFormMessage("teamsPageMessage", "error", error.message);
+  }
+}
+
+async function submitTeam() {
+  clearTeamFormErrors();
+  const name = document.getElementById("teamNameInput").value.trim();
+  const city = document.getElementById("teamCityInput").value.trim();
+
+  let hasError = false;
+  if (!name) {
+    setFieldError("teamNameInput", "teamNameError", "Team name is required.");
+    hasError = true;
+  }
+  if (!city) {
+    setFieldError("teamCityInput", "teamCityError", "City is required.");
+    hasError = true;
+  }
+  if (name.length > 150) {
+    setFieldError("teamNameInput", "teamNameError", "Team name must be at most 150 characters.");
+    hasError = true;
+  }
+  if (name && !TEAM_NAME_REGEX.test(name)) {
+    setFieldError("teamNameInput", "teamNameError", "Use 2-80 chars: letters, numbers, spaces, apostrophe, dot, &, hyphen.");
+    hasError = true;
+  }
+  if (city.length > 120) {
+    setFieldError("teamCityInput", "teamCityError", "City must be at most 120 characters.");
+    hasError = true;
+  }
+  if (city && !CITY_REGEX.test(city)) {
+    setFieldError("teamCityInput", "teamCityError", "Use 2-80 letters for city.");
+    hasError = true;
+  }
+  if (hasError) return;
+
+  const url = editingTeamId ? `${API_BASE}/teams/${editingTeamId}` : `${API_BASE}/teams`;
+  const method = editingTeamId ? "PUT" : "POST";
+  try {
+    await fetchJson(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, city })
+    });
+    closeTeamModal();
+    await loadTeams();
+  } catch (error) {
+    setFormMessage("teamFormMessage", "error", error.message);
+  }
+}
+
+async function submitPlayer() {
+  clearPlayerFormErrors();
+  const name = document.getElementById("playerNameInput").value.trim();
+  const role = document.getElementById("playerRoleInput").value.trim();
+  const runs = document.getElementById("playerRunsInput").value.trim();
+  const wickets = document.getElementById("playerWicketsInput").value.trim();
+
+  let hasError = false;
+  if (!name) {
+    setFieldError("playerNameInput", "playerNameError", "Player name is required.");
+    hasError = true;
+  }
+  if (name && !NAME_REGEX.test(name)) {
+    setFieldError("playerNameInput", "playerNameError", "Use 2-80 letters for player name.");
+    hasError = true;
+  }
+  if (!role) {
+    setFieldError("playerRoleInput", "playerRoleError", "Role is required.");
+    hasError = true;
+  }
+  if (role && !PLAYER_ROLES.includes(role)) {
+    setFieldError("playerRoleInput", "playerRoleError", "Choose a valid role from the dropdown.");
+    hasError = true;
+  }
+  if (runs && Number(runs) < 0) {
+    setFieldError("playerRunsInput", "playerRunsError", "Runs cannot be negative.");
+    hasError = true;
+  }
+  if (runs && !Number.isInteger(Number(runs))) {
+    setFieldError("playerRunsInput", "playerRunsError", "Runs must be a whole number.");
+    hasError = true;
+  }
+  if (wickets && Number(wickets) < 0) {
+    setFieldError("playerWicketsInput", "playerWicketsError", "Wickets cannot be negative.");
+    hasError = true;
+  }
+  if (wickets && !Number.isInteger(Number(wickets))) {
+    setFieldError("playerWicketsInput", "playerWicketsError", "Wickets must be a whole number.");
+    hasError = true;
+  }
+  if (runs && Number(runs) > 50000) {
+    setFieldError("playerRunsInput", "playerRunsError", "Runs is too large.");
+    hasError = true;
+  }
+  if (wickets && Number(wickets) > 2000) {
+    setFieldError("playerWicketsInput", "playerWicketsError", "Wickets is too large.");
+    hasError = true;
+  }
+  if (!playerTeamId) {
+    setFormMessage("playerFormMessage", "error", "Team reference missing.");
+    hasError = true;
+  }
+  if (hasError) return;
+
+  const url = editingPlayerId ? `${API_BASE}/players/${editingPlayerId}` : `${API_BASE}/teams/${playerTeamId}/players`;
+  const method = editingPlayerId ? "PUT" : "POST";
+  try {
+    await fetchJson(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        role,
+        runs: Number(runs || 0),
+        wickets: Number(wickets || 0)
+      })
+    });
+    await Promise.all([loadPlayers(playerTeamId), loadTeams()]);
+    closePlayerModal();
+  } catch (error) {
+    setFormMessage("playerFormMessage", "error", error.message);
+  }
+}
+
+async function deleteTeam(teamId) {
+  if (!confirm("Delete this team?")) return;
+  try {
+    const rawUser = sessionStorage.getItem("crictrack_user");
+    const parsedUser = rawUser ? JSON.parse(rawUser) : null;
+    const userId = parsedUser && parsedUser.id ? parsedUser.id : null;
+    const response = await fetch(`${API_BASE}/teams/${teamId}`, {
+      method: "DELETE",
+      headers: userId ? { "x-user-id": String(userId) } : {}
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || "Failed to delete team");
+    }
+    expandedTeamIds.delete(teamId);
+    delete playersByTeam[teamId];
+    await loadTeams();
+  } catch (error) {
+    setFormMessage("teamsPageMessage", "error", error.message);
+  }
+}
+
+async function deletePlayer(teamId, playerId) {
+  try {
+    const rawUser = sessionStorage.getItem("crictrack_user");
+    const parsedUser = rawUser ? JSON.parse(rawUser) : null;
+    const userId = parsedUser && parsedUser.id ? parsedUser.id : null;
+    const response = await fetch(`${API_BASE}/players/${playerId}`, {
+      method: "DELETE",
+      headers: userId ? { "x-user-id": String(userId) } : {}
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || "Failed to delete player");
+    }
+    await Promise.all([loadPlayers(teamId), loadTeams()]);
+  } catch (error) {
+    setFormMessage("teamsPageMessage", "error", error.message);
+  }
+}
+
+function initUserBadge() {
+  const raw = sessionStorage.getItem("crictrack_user");
+  if (!raw) {
+    document.getElementById("currentUserName").innerText = "Guest";
+    document.getElementById("profileBadge").innerText = "G";
+    document.getElementById("accountName").innerText = "Guest";
+    document.getElementById("accountEmail").innerText = "-";
+    document.getElementById("accountId").innerText = "-";
+    return;
+  }
+  try {
+    currentUser = JSON.parse(raw);
+    const displayName = currentUser.displayName || "User";
+    const email = currentUser.email || "-";
+    const id = currentUser.id || "-";
+    document.getElementById("currentUserName").innerText = displayName;
+    document.getElementById("profileBadge").innerText = displayName.slice(0, 1).toUpperCase();
+    document.getElementById("accountName").innerText = displayName;
+    document.getElementById("accountEmail").innerText = email;
+    document.getElementById("accountId").innerText = id;
+  } catch (_error) {
+    document.getElementById("currentUserName").innerText = "Guest";
+    document.getElementById("profileBadge").innerText = "G";
+    document.getElementById("accountName").innerText = "Guest";
+    document.getElementById("accountEmail").innerText = "-";
+    document.getElementById("accountId").innerText = "-";
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const menu = document.getElementById("accountMenu");
+  if (!menu.contains(event.target)) closeAccountMenu();
+});
+
+initUserBadge();
+loadTeams();
+</script>
+
+</body>
+</html>

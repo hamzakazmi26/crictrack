@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CrickTrack - Login</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script>
+    (function () {
+      const raw = sessionStorage.getItem("crictrack_user");
+      if (raw) {
+        window.location.replace("dashboard.html");
+      }
+    })();
+  </script>
+</head>
+<body>
+
+<div class="logo-section">
+  <div class="logo-icon">T</div>
+  <div class="brand-name">CrickTrack</div>
+</div>
+
+<div class="auth-card">
+  <h2>Welcome to the Pavilion</h2>
+  <p>Sign in or create an account</p>
+
+  <div class="tabs">
+    <div class="tab active" onclick="showLogin()">Log In</div>
+    <div class="tab" onclick="showRegister()">Register</div>
+  </div>
+
+  <form id="loginForm">
+    <label>Email</label>
+    <input id="loginEmail" type="email" placeholder="your@email.com" required maxlength="255">
+    <div class="field-error" id="loginEmailError"></div>
+
+    <label>Password</label>
+    <input id="loginPassword" type="password" placeholder="password" required maxlength="100">
+    <div class="field-error" id="loginPasswordError"></div>
+
+    <button type="submit" class="auth-btn">Log In</button>
+    <div class="form-message" id="loginMessage"></div>
+  </form>
+
+  <form id="registerForm" style="display:none;">
+    <label>Email</label>
+    <input id="registerEmail" type="email" placeholder="your@email.com" required maxlength="255">
+    <div class="field-error" id="registerEmailError"></div>
+
+    <label>Display Name</label>
+    <input id="registerName" type="text" placeholder="Your Name" required maxlength="120">
+    <div class="field-error" id="registerNameError"></div>
+
+    <label>Password</label>
+    <input id="registerPassword" type="password" placeholder="password" required maxlength="100">
+    <div class="field-error" id="registerPasswordError"></div>
+
+    <button type="submit" class="auth-btn">Create Account</button>
+    <div class="form-message" id="registerMessage"></div>
+  </form>
+</div>
+
+<script>
+const API_BASE = "http://localhost:4000/api";
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const DISPLAY_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9\s._'-]{1,119}$/;
+const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,100}$/;
+
+function setFieldError(inputId, errorId, message) {
+  const input = document.getElementById(inputId);
+  const error = document.getElementById(errorId);
+  error.innerText = message || "";
+  input.classList.toggle("input-error", Boolean(message));
+}
+
+function clearLoginErrors() {
+  setFieldError("loginEmail", "loginEmailError", "");
+  setFieldError("loginPassword", "loginPasswordError", "");
+}
+
+function clearRegisterErrors() {
+  setFieldError("registerEmail", "registerEmailError", "");
+  setFieldError("registerName", "registerNameError", "");
+  setFieldError("registerPassword", "registerPasswordError", "");
+}
+
+function setFormMessage(id, type, message) {
+  const el = document.getElementById(id);
+  el.className = "form-message" + (type ? ` ${type}` : "");
+  el.innerText = message || "";
+  if (!message) {
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "block";
+}
+
+function showLogin() {
+  document.getElementById("loginForm").style.display = "flex";
+  document.getElementById("registerForm").style.display = "none";
+  document.querySelectorAll(".tab")[0].classList.add("active");
+  document.querySelectorAll(".tab")[1].classList.remove("active");
+  clearLoginErrors();
+  setFormMessage("loginMessage", "", "");
+  setFormMessage("registerMessage", "", "");
+}
+
+function showRegister() {
+  document.getElementById("loginForm").style.display = "none";
+  document.getElementById("registerForm").style.display = "flex";
+  document.querySelectorAll(".tab")[1].classList.add("active");
+  document.querySelectorAll(".tab")[0].classList.remove("active");
+  clearRegisterErrors();
+  setFormMessage("loginMessage", "", "");
+  setFormMessage("registerMessage", "", "");
+}
+
+async function apiRequest(url, method, payload) {
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: payload ? JSON.stringify(payload) : undefined
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.message || "Request failed");
+  return data;
+}
+
+document.getElementById("loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  clearLoginErrors();
+  setFormMessage("loginMessage", "", "");
+
+  const email = document.getElementById("loginEmail").value.trim();
+  const password = document.getElementById("loginPassword").value;
+
+  let hasError = false;
+  if (!EMAIL_REGEX.test(email)) {
+    setFieldError("loginEmail", "loginEmailError", "Enter a valid email.");
+    hasError = true;
+  }
+  if (!password || password.length < 8) {
+    setFieldError("loginPassword", "loginPasswordError", "Password must be at least 8 characters.");
+    hasError = true;
+  } else if (password.length > 100) {
+    setFieldError("loginPassword", "loginPasswordError", "Password is too long.");
+    hasError = true;
+  }
+  if (hasError) return;
+
+  try {
+    const data = await apiRequest(`${API_BASE}/auth/login`, "POST", {
+      email,
+      password
+    });
+    sessionStorage.setItem("crictrack_user", JSON.stringify(data.user));
+    localStorage.removeItem("crictrack_user");
+    window.location.href = "dashboard.html";
+  } catch (error) {
+    setFormMessage("loginMessage", "error", error.message);
+  }
+});
+
+document.getElementById("registerForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  clearRegisterErrors();
+  setFormMessage("registerMessage", "", "");
+
+  const email = document.getElementById("registerEmail").value.trim();
+  const displayName = document.getElementById("registerName").value.trim();
+  const password = document.getElementById("registerPassword").value;
+
+  let hasError = false;
+  if (!EMAIL_REGEX.test(email)) {
+    setFieldError("registerEmail", "registerEmailError", "Enter a valid email.");
+    hasError = true;
+  }
+  if (!DISPLAY_NAME_REGEX.test(displayName)) {
+    setFieldError("registerName", "registerNameError", "Use 2-120 chars, start with letter.");
+    hasError = true;
+  }
+  if (!PASSWORD_REGEX.test(password)) {
+    setFieldError("registerPassword", "registerPasswordError", "Min 8 chars with uppercase, lowercase, and number.");
+    hasError = true;
+  }
+  if (hasError) return;
+
+  try {
+    await apiRequest(`${API_BASE}/auth/register`, "POST", {
+      email,
+      displayName,
+      password
+    });
+    showLogin();
+    setFormMessage("loginMessage", "success", "Account created. Please log in.");
+  } catch (error) {
+    setFormMessage("registerMessage", "error", error.message);
+  }
+});
+</script>
+
+</body>
+</html>
